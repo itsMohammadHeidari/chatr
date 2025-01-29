@@ -26,6 +26,7 @@ type Client struct {
 	port           int
 	username       string
 	conn           net.Conn
+	mu             sync.RWMutex
 	wg             sync.WaitGroup
 	app            *tview.Application
 	usersTable     *tview.Table
@@ -166,54 +167,60 @@ func (c *Client) readMessages() {
 
 func (c *Client) handleServerLine(line string) {
 	if strings.HasPrefix(line, "USERS:") {
+		// Handle user list
 		userList := strings.TrimPrefix(line, "USERS:")
 		users := strings.Split(userList, ",")
 
+		c.mu.Lock()
 		c.connectedUsers = make(map[string]bool)
-
 		for _, user := range users {
 			user = strings.TrimSpace(user)
 			if user != "" {
 				c.connectedUsers[user] = true
-				// Assign a color if user doesn't have one
-				if _, exists := c.colorMap[user]; !exists {
-					colorIndex := len(c.colorMap) % len(c.colors)
-					c.colorMap[user] = c.colors[colorIndex]
+				if _, ok := c.colorMap[user]; !ok {
+					idx := len(c.colorMap) % len(c.colors)
+					c.colorMap[user] = c.colors[idx]
 				}
 			}
 		}
+		c.mu.Unlock()
+
 		c.refreshUsers()
 		return
 	}
 
+	// Otherwise, treat as broadcast: "[sender] message"
 	parts := strings.SplitN(line, "]", 2)
 	if len(parts) == 2 {
 		sender := strings.TrimPrefix(parts[0], "[")
 		text := parts[1]
 
-		// Get or assign color for sender
+		// Assign color to sender if needed
+		c.mu.Lock()
 		color, exists := c.colorMap[sender]
 		if !exists {
-			colorIndex := len(c.colorMap) % len(c.colors)
-			c.colorMap[sender] = c.colors[colorIndex]
-			color = c.colors[colorIndex]
+			idx := len(c.colorMap) % len(c.colors)
+			c.colorMap[sender] = c.colors[idx]
+			color = c.colors[idx]
 		}
+		c.mu.Unlock()
 
+		// Print message in chatBox
 		c.app.QueueUpdateDraw(func() {
-			// Format timestamp
 			timestamp := time.Now().Format("15:04:05")
-			// Format message with color, timestamp, and sender
 			fmt.Fprintf(c.chatBox, "[%s][%s] [::b]%s[::-] %s\n",
 				color, timestamp, sender, text)
 		})
 	}
 }
 
-// refreshUsers updates the users table.
+// refreshUsers updates the users table in the TUI.
 func (c *Client) refreshUsers() {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	c.usersTable.Clear()
 	row := 0
-
 	c.usersTable.SetCell(row, 0,
 		tview.NewTableCell("[::b]Connected Users").
 			SetTextColor(tcell.ColorYellow).
