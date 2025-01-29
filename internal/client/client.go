@@ -137,6 +137,10 @@ func (c *Client) Stop() error {
 
 // Send writes a message to the server.
 func (c *Client) Send(msg string) {
+	// Guard clause: no connection or empty message
+	if c.conn == nil || strings.TrimSpace(msg) == "" {
+		return
+	}
 	if c.conn != nil && strings.TrimSpace(msg) != "" {
 		_, _ = c.conn.Write([]byte(msg + "\n"))
 	}
