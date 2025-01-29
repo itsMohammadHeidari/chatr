@@ -271,6 +271,7 @@ func (c *Client) refreshUsers() {
 // printToChat is a helper to safely append text to the chat box.
 func (c *Client) printToChat(msg string) {
 	c.app.QueueUpdateDraw(func() {
+		c.chatBox.ScrollToEnd()
 		fmt.Fprintf(c.chatBox, "%s\n", msg)
 	})
 }
