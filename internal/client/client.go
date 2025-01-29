@@ -68,7 +68,7 @@ func (c *Client) Start() error {
 	}
 
 	// Build the TUI
-	c.app = tview.NewApplication()
+	c.app = tview.NewApplication().EnableMouse(true)
 
 	rootFlex := tview.NewFlex().SetDirection(tview.FlexRow)
 
@@ -87,7 +87,11 @@ func (c *Client) Start() error {
 	// Create the chat box
 	c.chatBox = tview.NewTextView().
 		SetDynamicColors(true).
-		SetWrap(true)
+		SetWrap(true).
+		SetScrollable(true).
+		SetChangedFunc(func() {
+			c.app.Draw()
+		})
 
 	c.chatBox.SetBorder(true).SetTitle(fmt.Sprintf("[::b]Chat as %s", c.username))
 
@@ -109,8 +113,31 @@ func (c *Client) Start() error {
 	rootFlex.AddItem(contentFlex, 0, 1, true)
 	rootFlex.AddItem(c.inputField, 3, 1, false)
 
-	c.app.SetRoot(rootFlex, true).SetFocus(c.inputField)
-
+	c.app.SetRoot(rootFlex, true).
+		SetFocus(c.inputField).
+		SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			switch event.Key() {
+			case tcell.KeyUp:
+				row, _ := c.chatBox.GetScrollOffset()
+				c.chatBox.ScrollTo(row-1, 0)
+				return nil
+			case tcell.KeyDown:
+				row, _ := c.chatBox.GetScrollOffset()
+				c.chatBox.ScrollTo(row+1, 0)
+				return nil
+			case tcell.KeyPgUp:
+				_, _, _, height := c.chatBox.GetInnerRect()
+				row, _ := c.chatBox.GetScrollOffset()
+				c.chatBox.ScrollTo(row-height, 0)
+				return nil
+			case tcell.KeyPgDn:
+				_, _, _, height := c.chatBox.GetInnerRect()
+				row, _ := c.chatBox.GetScrollOffset()
+				c.chatBox.ScrollTo(row+height, 0)
+				return nil
+			}
+			return event
+		})
 	// Start goroutine to read server messages
 	c.wg.Add(1)
 	go c.readMessages()
