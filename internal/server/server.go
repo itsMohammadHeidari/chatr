@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ServerInterface defines methods for the server.
@@ -59,7 +60,7 @@ func (s *Server) Stop() error {
 	defer s.mu.Unlock()
 
 	for conn := range s.clients {
-		conn.Close()
+		_ = conn.Close()
 		delete(s.clients, conn)
 	}
 	log.Println("Server stopped.")
@@ -72,42 +73,58 @@ func (s *Server) Broadcast(sender string, msg string) {
 	defer s.mu.Unlock()
 
 	fullMsg := fmt.Sprintf("[%s] %s\n", sender, msg)
+	var failedConns []net.Conn
+
 	for c := range s.clients {
-		_, err := c.Write([]byte(fullMsg))
-		if err != nil {
+		if _, err := c.Write([]byte(fullMsg)); err != nil {
 			log.Printf("error writing to %s: %v", c.RemoteAddr(), err)
+			failedConns = append(failedConns, c)
 		}
+	}
+	// Remove stale connections
+	for _, fc := range failedConns {
+		_ = fc.Close()
+		delete(s.clients, fc)
 	}
 }
 
-// Add new method to broadcast user list
+// broadcastUserList sends the updated user list to all clients.
 func (s *Server) broadcastUserList() {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	var users []string
 	for _, user := range s.clients {
 		users = append(users, user)
 	}
-	s.mu.Unlock()
-
 	userListMsg := "USERS:" + strings.Join(users, ",") + "\n"
-	s.mu.Lock()
+
+	var failedConns []net.Conn
 	for conn := range s.clients {
-		conn.Write([]byte(userListMsg))
+		if _, err := conn.Write([]byte(userListMsg)); err != nil {
+			log.Printf("error writing user list to %s: %v", conn.RemoteAddr(), err)
+			failedConns = append(failedConns, conn)
+		}
 	}
-	s.mu.Unlock()
+	// Remove stale connections
+	for _, fc := range failedConns {
+		_ = fc.Close()
+		delete(s.clients, fc)
+	}
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
+	// Cleanup logic when the function returns
 	defer func() {
 		s.mu.Lock()
 		username := s.clients[conn]
 		delete(s.clients, conn)
 		s.mu.Unlock()
-		// Broadcast user left and updated user list
+
 		s.Broadcast("SERVER", fmt.Sprintf("%s has left the chat.", username))
-		s.broadcastUserList() // Broadcast updated user list
+		s.broadcastUserList()
 		log.Printf("Client disconnected: %s", conn.RemoteAddr())
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	reader := bufio.NewReader(conn)
@@ -123,30 +140,34 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	}
 
-	username := strings.TrimPrefix(line, "USERNAME:")
-	username = strings.TrimSpace(username)
+	username := strings.TrimSpace(strings.TrimPrefix(line, "USERNAME:"))
 	if username == "" {
 		username = "Guest"
 	}
 
-	// Store the client and broadcast updated user list
+	// Add client to the map
 	s.mu.Lock()
 	s.clients[conn] = username
 	s.mu.Unlock()
 
-	// Broadcast updated user list to all clients
 	s.broadcastUserList()
-
-	// Broadcast that the user has joined
 	s.Broadcast("SERVER", fmt.Sprintf("%s has joined the chat.", username))
 	log.Printf("Client %s joined as '%s'", conn.RemoteAddr(), username)
 
-	// Read messages in a loop and broadcast them
+	// Read messages in a loop, applying read deadlines
 	for {
+		conn.SetReadDeadline(time.Now().Add(2 * time.Minute))
 		msg, err := reader.ReadString('\n')
 		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				log.Printf("Client %s timed out", conn.RemoteAddr())
+			} else {
+				log.Printf("error reading from %s: %v", conn.RemoteAddr(), err)
+			}
 			return
 		}
+		conn.SetReadDeadline(time.Time{}) // reset read deadline after success
+
 		s.Broadcast(username, strings.TrimSpace(msg))
 	}
 }
