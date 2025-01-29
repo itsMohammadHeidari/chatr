@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -10,7 +11,12 @@ import (
 )
 
 func LoadConfig() error {
-	_ = godotenv.Load(".env")
+	err := godotenv.Load(".env")
+	if err != nil {
+		if !strings.Contains(err.Error(), "no such file or directory") {
+			log.Printf("Warning: unable to load .env file: %v", err)
+		}
+	}
 
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
